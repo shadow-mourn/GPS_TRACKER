@@ -1,0 +1,303 @@
+
+
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ارسال موقعیت — Sender</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#07070a; --panel:#0f1114; --muted:#9aa0a6; --accent:#00d084; --danger:#ff6b6b;
+    --glass: rgba(255,255,255,0.03);
+  }
+  *{box-sizing:border-box;font-family:"Vazirmatn",system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#050507, #0a0b0d);color:#e6eef6}
+  .wrap{max-width:820px;margin:18px auto;padding:16px;}
+  header{display:flex;gap:12px;align-items:center}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  .card{background:linear-gradient(180deg,var(--panel),rgba(13,14,17,0.85));border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,0.5);margin-top:12px}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+  input[type=text]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{background:var(--accent);color:#021012;border:0;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+  button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+  .status{font-size:13px;color:var(--muted);margin-top:8px}
+  .big{font-size:20px;font-weight:600}
+  pre{background:transparent;color:var(--muted);white-space:pre-wrap;max-height:200px;overflow:auto;margin:8px 0;padding:8px;border-radius:8px}
+  .badge{display:inline-block;padding:6px 8px;border-radius:10px;background:rgba(0,0,0,0.25);font-size:13px}
+  .danger{background:rgba(255,80,80,0.12);color:var(--danger);padding:8px;border-radius:8px;margin-top:8px}
+  @media (max-width:520px){
+    header{flex-direction:column;align-items:flex-start}
+    .row{flex-direction:column}
+  }
+  .hint{font-size:13px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ارسال موقعیت — آنلاین</h1>
+    <div class="badge" id="permBadge">وضعیت مجوز: نامعلوم</div>
+  </header>
+
+  <div class="card">
+    <label for="scriptUrl">آدرس Google Script (Web App URL)</label>
+    <input id="scriptUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec">
+    <div class="row" style="margin-top:10px">
+      <button id="startBtn">شروع ارسال</button>
+      <button id="stopBtn" class="secondary" disabled>توقف</button>
+      <button id="clearQueue" class="secondary">پاک کردن صف</button>
+    </div>
+    <div class="status" id="mainStatus">هر کاری قبل از شروع انجام شود اینجا نمایش داده می‌شود.</div>
+    <div class="hint">این صفحه هر ۵ ثانیه تلاش می‌کند موقعیت بگیرد و ارسال کند. اگر ارسال با خطا مواجه شود، داده در صف ذخیره می‌شود و هنگام برگشت شبکه ارسال می‌شود.</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div class="big" id="lastCoords">—</div>
+        <div class="status" id="lastTs">تاریخ/زمان: —</div>
+      </div>
+      <div style="text-align:right">
+        <div class="status">تعداد در صف</div>
+        <div class="big" id="queueCount">0</div>
+      </div>
+    </div>
+
+    <pre id="logArea">لاگ: آماده</pre>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div style="font-weight:600;margin-bottom:8px">راهنما در صورت ردِ دسترسی GPS</div>
+    <div id="permHelp" class="hint">اگر مرورگر از شما سوال نکرد یا access denied شد: تنظیمات مرورگر یا تنظیمات موقعیت گوشی را باز کن → Location (یا موقعیت) را برای این سایت فعال کن. در اندروید مرورگرها ممکن است نیاز باشد Permissions در تنظیمات سایت فعال شود.</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const S_KEY_URL = 'gps_sender_url';
+  const S_KEY_QUEUE = 'gps_sender_queue_v1';
+  const INTERVAL_MS = 5000;
+
+  const el = {
+    scriptUrl: document.getElementById('scriptUrl'),
+    startBtn: document.getElementById('startBtn'),
+    stopBtn: document.getElementById('stopBtn'),
+    mainStatus: document.getElementById('mainStatus'),
+    lastCoords: document.getElementById('lastCoords'),
+    lastTs: document.getElementById('lastTs'),
+    logArea: document.getElementById('logArea'),
+    queueCount: document.getElementById('queueCount'),
+    permBadge: document.getElementById('permBadge'),
+    permHelp: document.getElementById('permHelp'),
+    clearQueue: document.getElementById('clearQueue')
+  };
+
+  // restore URL and queue
+  el.scriptUrl.value = localStorage.getItem(S_KEY_URL) || '';
+  let queue = JSON.parse(localStorage.getItem(S_KEY_QUEUE) || '[]');
+
+  let watchTimer = null;
+  let isRunning = false;
+  let lastPosition = null;
+
+  function log(s){
+    const t = new Date().toLocaleTimeString();
+    el.logArea.textContent = `[${t}] ${s}\n` + el.logArea.textContent;
+  }
+
+  function saveQueue(){
+    localStorage.setItem(S_KEY_QUEUE, JSON.stringify(queue));
+    el.queueCount.textContent = queue.length;
+  }
+
+  function enqueue(point){
+    queue.push(point);
+    saveQueue();
+    log('Queued point (' + point.lat.toFixed(6) + ',' + point.lon.toFixed(6) + ')');
+  }
+
+  async function sendNow(point){
+    const url = el.scriptUrl.value.trim();
+    if(!url) { log('خطا: آدرس Script تنظیم نشده'); return false; }
+    try{
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(point),
+      });
+      if(res.ok){
+        log('ارسال موفق: ' + point.lat.toFixed(6) + ',' + point.lon.toFixed(6));
+        return true;
+      } else {
+        log('ارسال ناموفق، وضعیت HTTP: ' + res.status);
+        return false;
+      }
+    } catch(err){
+      log('ارسال خطا: ' + (err.message||err));
+      return false;
+    }
+  }
+
+  async function flushQueue(){
+    if(queue.length === 0) return;
+    log('تلاش برای ارسال صف (' + queue.length + ') ...');
+    // try in-order
+    let newQueue = [];
+    for(let p of queue){
+      const ok = await sendNow(p);
+      if(!ok) {
+        newQueue.push(p);
+        // network may be down — break to avoid too many requests
+        break;
+      }
+    }
+    queue = newQueue.concat(queue.slice(newQueue.length)); // keep remaining
+    saveQueue();
+    if(queue.length === 0) log('صف خالی شد.');
+  }
+
+  function updatePermBadge(state){
+    el.permBadge.textContent = 'وضعیت مجوز: ' + state;
+  }
+
+  async function checkPermission(){
+    if(!navigator.permissions) {
+      updatePermBadge('نامشخص');
+      return;
+    }
+    try{
+      const p = await navigator.permissions.query({name:'geolocation'});
+      const s = p.state;
+      updatePermBadge(s);
+      p.onchange = ()=> updatePermBadge(p.state);
+    }catch(e){
+      updatePermBadge('نامشخص');
+    }
+  }
+
+  async function getAndSend(){
+    if(!navigator.geolocation){
+      log('Geolocation پشتیبانی نمی‌شود.');
+      updatePermBadge('unsupported');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(async (pos)=>{
+      lastPosition = pos;
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      const ts = Date.now();
+      el.lastCoords.textContent = lat.toFixed(6) + ' , ' + lon.toFixed(6);
+      el.lastTs.textContent = new Date(ts).toLocaleString();
+      const point = {lat, lon, ts};
+      // try send immediate
+      const ok = await sendNow(point);
+      if(!ok) enqueue(point);
+      else {
+        // after a successful send, also try to flush queued ones
+        await flushQueue();
+      }
+    }, (err)=>{
+      log('خطا در گرفتن موقعیت: ' + (err.message||err.code));
+      if(err.code === 1){ // PERMISSION_DENIED
+        updatePermBadge('denied');
+        el.permHelp.style.display = 'block';
+        log('دسترسی به موقعیت رد شده. تنظیمات را بررسی کن.');
+        stopSending(); // stop auto requests
+      }
+      if(err.code === 2){ log('موقعیت در دسترس نیست (NETWORK/POSITION UNAVAILABLE)'); }
+      if(err.code === 3){ log('timeout برای گرفتن موقعیت'); }
+    }, { enableHighAccuracy:true, timeout:8000, maximumAge:3000 });
+  }
+
+  function startSending(){
+    if(isRunning) return;
+    const url = el.scriptUrl.value.trim();
+    if(!url){ alert('آدرس Google Script را وارد کن.'); el.scriptUrl.focus(); return; }
+    localStorage.setItem(S_KEY_URL, url);
+    isRunning = true;
+    el.startBtn.disabled = true;
+    el.stopBtn.disabled = false;
+    el.mainStatus.textContent = 'در حال ارسال...';
+    log('شروع ارسال هر ' + (INTERVAL_MS/1000) + ' ثانیه');
+    // immediate fetch + interval
+    getAndSend();
+    watchTimer = setInterval(getAndSend, INTERVAL_MS);
+    // also try flush queued every 20s
+    flushQueue();
+  }
+
+  function stopSending(){
+    if(!isRunning) return;
+    isRunning = false;
+    el.startBtn.disabled = false;
+    el.stopBtn.disabled = true;
+    clearInterval(watchTimer);
+    watchTimer = null;
+    el.mainStatus.textContent = 'توقف شد';
+    log('ارسال متوقف شد.');
+  }
+
+  // clear queue action
+  el.clearQueue.addEventListener('click', ()=>{
+    if(!confirm('پاک کردن صف ارسال — مطمئنی؟')) return;
+    queue = []; saveQueue(); log('صف پاک شد.');
+  });
+
+  el.startBtn.addEventListener('click', async ()=>{
+    // before start, proactively check permission and request if needed
+    if(navigator.permissions){
+      try{
+        const p = await navigator.permissions.query({name:'geolocation'});
+        if(p.state === 'denied'){
+          updatePermBadge('denied');
+          alert('دسترسی موقعیت برای این سایت رد شده — باید آن را از تنظیمات مرورگر/سایت فعال کنی.');
+          return;
+        }
+      }catch(e){}
+    }
+    // try a one-time prompt to get permission (so browser will ask)
+    if(navigator.geolocation){
+      navigator.geolocation.getCurrentPosition(()=> {
+        // user allowed -> start
+        startSending();
+      }, (err)=>{
+        if(err.code === 1){
+          updatePermBadge('denied');
+          alert('دسترسی موقعیت رد شد. لطفاً Permissions را فعال کن.');
+        } else {
+          // still start: sometimes getCurrentPosition times out but permissions ok
+          startSending();
+        }
+      }, {maximumAge:0, timeout:7000});
+    } else {
+      alert('Geolocation پشتیبانی نمی‌شود در این مرورگر.');
+    }
+  });
+
+  el.stopBtn.addEventListener('click', stopSending);
+
+  // initial setup
+  saveQueue();
+  checkPermission();
+  // try to flush queued when network becomes online
+  window.addEventListener('online', ()=>{
+    log('شبکه برگشت — تلاش برای ارسال صف');
+    flushQueue();
+  });
+
+  // show queue count
+  el.queueCount.textContent = queue.length;
+  // expose for debug
+  window._gpsQueue = queue;
+
+  // auto-check permission every 10s to update badge
+  setInterval(checkPermission, 10000);
+
+})();
+</script>
+</body>
+</html>
